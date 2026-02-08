@@ -89,7 +89,7 @@ function M.merge(opts)
 	-- Conflicts detected - abort if silent mode
 	if exit_code > 0 then
 		if silent then
-			vim.notify("Auto-merge aborted: conflicts detected. Use <leader>bm to merge manually.", vim.log.levels.WARN)
+			vim.notify("Auto-merge aborted: conflicts detected. Use " .. M.config.keymap_merge .. " to merge manually.", vim.log.levels.WARN)
 			return false
 		else
 			-- Interactive mode: show conflicts
