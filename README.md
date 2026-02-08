@@ -45,10 +45,13 @@ No git repository required. Shadow files stored in `~/.cache/nvim/swap-merge-sha
   opts = {
     keymap_merge = "<leader>bm",
     keymap_diff = "<leader>bD",
-    auto_prompt = true, -- prompt on FileChangedShell
+    auto_prompt = true,  -- prompt on FileChangedShell
+    auto_merge = false,  -- silently merge if clean, abort on conflicts
   },
 }
 ```
+
+Set `auto_merge = true` for hands-free merging — it will merge silently when possible and notify you if conflicts are detected (without inserting markers).
 
 ## Requirements
 
