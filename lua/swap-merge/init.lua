@@ -6,6 +6,8 @@ M.config = {
 	keymap_diff = "<leader>bD",
 	-- Auto-prompt on FileChangedShell when buffer is modified
 	auto_prompt = true,
+	-- Auto-merge silently on change (only if clean, aborts on conflicts)
+	auto_merge = false,
 }
 
 -- Shadow base directory for storing file snapshots
@@ -29,7 +31,11 @@ local function update_shadow(file)
 end
 
 -- Three-way merge: buffer (yours) + disk (theirs) + shadow (base)
-function M.merge()
+-- Returns: true if merged cleanly, false if conflicts or error
+function M.merge(opts)
+	opts = opts or {}
+	local silent = opts.silent or false
+
 	local buf = vim.api.nvim_get_current_buf()
 	local file = vim.fn.expand("%:p")
 	local shadow = get_shadow_path(file)
@@ -39,14 +45,18 @@ function M.merge()
 		-- No local changes, just reload
 		vim.cmd("edit!")
 		update_shadow(file)
-		vim.notify("Reloaded (no local changes)")
-		return
+		if not silent then
+			vim.notify("Reloaded (no local changes)")
+		end
+		return true
 	end
 
 	-- Check if shadow exists
 	if vim.fn.filereadable(shadow) == 0 then
-		vim.notify("No shadow base found, cannot merge. Try :e! to reload.", vim.log.levels.WARN)
-		return
+		if not silent then
+			vim.notify("No shadow base found, cannot merge. Try :e! to reload.", vim.log.levels.WARN)
+		end
+		return false
 	end
 
 	-- Save buffer content to temp file (yours)
@@ -70,30 +80,43 @@ function M.merge()
 	vim.fn.delete(yours)
 
 	if exit_code < 0 then
-		vim.notify("Merge failed: " .. result, vim.log.levels.ERROR)
-		return
+		if not silent then
+			vim.notify("Merge failed: " .. result, vim.log.levels.ERROR)
+		end
+		return false
 	end
 
-	-- Replace buffer with merged result
+	-- Conflicts detected - abort if silent mode
+	if exit_code > 0 then
+		if silent then
+			vim.notify("Auto-merge aborted: conflicts detected. Use <leader>bm to merge manually.", vim.log.levels.WARN)
+			return false
+		else
+			-- Interactive mode: show conflicts
+			local merged_lines = vim.split(result, "\n", { plain = true })
+			if #merged_lines > 0 and merged_lines[#merged_lines] == "" then
+				table.remove(merged_lines)
+			end
+			vim.api.nvim_buf_set_lines(buf, 0, -1, false, merged_lines)
+			vim.notify(string.format("Merged with %d conflict(s) - search for <<<<<<<", exit_code), vim.log.levels.WARN)
+			vim.fn.search("<<<<<<<", "w")
+			return false
+		end
+	end
+
+	-- Clean merge
 	local merged_lines = vim.split(result, "\n", { plain = true })
-	-- Remove trailing empty line that git merge-file adds
 	if #merged_lines > 0 and merged_lines[#merged_lines] == "" then
 		table.remove(merged_lines)
 	end
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, merged_lines)
 
-	if exit_code == 0 then
-		-- Auto-write to checkpoint the merge
-		vim.cmd("silent write!")
-		-- Update shadow to the new merged content
-		update_shadow(file)
-		vim.notify("Merged cleanly and saved")
-	else
-		-- exit_code > 0 means conflicts (number of conflicts)
-		vim.notify(string.format("Merged with %d conflict(s) - search for <<<<<<<", exit_code), vim.log.levels.WARN)
-		-- Jump to first conflict marker
-		vim.fn.search("<<<<<<<", "w")
-	end
+	-- Auto-write to checkpoint the merge
+	vim.cmd("silent write!")
+	-- Update shadow to the new merged content
+	update_shadow(file)
+	vim.notify("Merged cleanly and saved")
+	return true
 end
 
 -- Open three-way diff view
@@ -150,14 +173,14 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("SwapMerge", M.merge, { desc = "Three-way merge external changes" })
 	vim.api.nvim_create_user_command("SwapDiff", M.diff, { desc = "Three-way diff external changes" })
 
-	-- Auto-prompt on FileChangedShell
-	if M.config.auto_prompt then
+	-- Handle FileChangedShell events
+	if M.config.auto_merge or M.config.auto_prompt then
 		vim.api.nvim_create_autocmd("FileChangedShell", {
 			pattern = "*",
 			callback = function(ev)
 				local buf = ev.buf
 
-				-- Only prompt if buffer is modified
+				-- Only act if buffer is modified
 				if not vim.bo[buf].modified then
 					return
 				end
@@ -166,17 +189,23 @@ function M.setup(opts)
 				vim.v.fcs_choice = ""
 
 				vim.schedule(function()
-					local choice = vim.fn.confirm(
-						"File changed externally. You have unsaved changes.",
-						"&Merge (3-way)\n&Diff view\n&Reload (lose changes)\n&Ignore",
-						1
-					)
-					if choice == 1 then
-						M.merge()
-					elseif choice == 2 then
-						M.diff()
-					elseif choice == 3 then
-						vim.cmd("edit!")
+					if M.config.auto_merge then
+						-- Silent auto-merge, aborts on conflicts
+						M.merge({ silent = true })
+					elseif M.config.auto_prompt then
+						-- Interactive prompt
+						local choice = vim.fn.confirm(
+							"File changed externally. You have unsaved changes.",
+							"&Merge (3-way)\n&Diff view\n&Reload (lose changes)\n&Ignore",
+							1
+						)
+						if choice == 1 then
+							M.merge()
+						elseif choice == 2 then
+							M.diff()
+						elseif choice == 3 then
+							vim.cmd("edit!")
+						end
 					end
 				end)
 			end,
